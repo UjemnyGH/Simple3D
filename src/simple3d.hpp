@@ -2,7 +2,12 @@
 
 #include <iostream>
 #include <vector>
+#include <fstream>
 #include <cstdlib>
+
+#ifndef NULL
+#define NULL nullptr
+#endif
 
 #if 1 // Hidding all of this GLAD code helps with readability. Overall this is 5577 lines of code that you should but don`t have to know
 /**
@@ -5591,6 +5596,7 @@ int gladLoadGL( GLADloadfunc load) {
 #include <cstring>
 #include <algorithm>
 #include <iostream>
+#include <bit>
 
 typedef float real;
 
@@ -5615,15 +5621,12 @@ real ToRadians(real degrees) { return degrees * M_PI_BY_180; }
  * @param x 
  * @return float
  */
-float RSqrt32(float number) {
-    float y = number * 0.5f;
-    long i = *reinterpret_cast<long*>(&number);
-    i = 0x5F375A86 - (i >> 1);
-    float r = *reinterpret_cast<float*>(&i);
-    r *= (1.5f - r * r * y);
-    r *= (1.5f - r * r * y);
+constexpr float RSqrt32(float number) noexcept {
+    const float y = std::bit_cast<float>(0x5F375A86 - (std::bit_cast<uint32_t>(number) >> 1));
+    //r *= (1.5f - r * r * y);
+    //r *= (1.5f - r * r * y);
 
-    return r;
+    return y * (1.5f - (number * 0.5f * y * y));
 }
 
 /**
@@ -6627,11 +6630,14 @@ const char *__gFragmentShaderSource =
 
 const char* __gTextVertexShaderSource = 
 "#version 450 core\n"
+"uniform mat4 uProjection;\n"
+"uniform mat4 uView;\n"
+"uniform mat4 uTransform;\n"
 "layout(location = 0) in vec4 iPosition;\n"
 "layout(location = 1) in vec4 iColor;\n"
 "out vec4 vColor;\n"
 "void main() {\n"
-"   gl_Position = iPosition;\n"
+"   gl_Position = uProjection * uView * uTransform * iPosition;\n"
 "   vColor = iColor;\n"
 "}\n";
 
@@ -6742,13 +6748,34 @@ const uint16_t __gDefaultFont[96][16] = {
     {0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000}
 };
 
+/**
+ * @brief Matrices for view
+ * 
+ */
 RMat _gProjection = RMat::Identity(), _gView = RMat::Identity(), _gTransform = RMat::Identity();
+
+/**
+ * @brief Vectors for position, rotation and scale
+ * 
+ */
 RVec __gCurrentPosition, __gCurrentRotation, __gCurrentScale = RVec(1.0f);
 
+/**
+ * @brief Main renderer pipeline
+ * 
+ */
 uint32_t __gShaderProgram, __gVertexShader, __gFragmentShader, __gVArray, __gVBPosition, __gVBColor, __gVBTexture;
 
+/**
+ * @brief Text renderer pipeline
+ * 
+ */
 uint32_t __gTextShaderProgram, __gTextVertexShader, __gTextFragmentShader, __gTextVArray, __gTextVBPosition, __gTextVBColor;
 
+/**
+ * @brief This is texture class, it creates OpenGL texture
+ * 
+ */
 class Texture {
 private:
     uint32_t mId;
@@ -6770,6 +6797,13 @@ public:
         glBindTexture(GL_TEXTURE_2D, mId);
     }
 
+    /**
+     * @brief Method for making OpenGL texture from memory data
+     * 
+     * @param pixels texture pixel data (eg. rgba(0xff, 0xff, 0xff, 0xff))
+     * @param width width of texture
+     * @param height height of texture
+     */
     void LoadTextureFromMemory(std::vector<uint8_t> pixels, int width, int height) {
         Bind();
 
@@ -6782,6 +6816,10 @@ public:
         glGenerateMipmap(GL_TEXTURE_2D);
     }
 
+    /**
+     * @brief Destroy the Texture object
+     * 
+     */
     ~Texture() {
         if(mCreated) {
             glDeleteTextures(1, &mId);
@@ -6792,6 +6830,10 @@ public:
     }
 };
 
+/**
+ * @brief This is framebuffer class, it is used to make texture from view
+ * 
+ */
 class Framebuffer {
 private:
     uint32_t mId;
@@ -6809,16 +6851,30 @@ public:
         }
     }
 
+    /**
+     * @brief Use this to render stuff in framebuffer
+     * 
+     */
     void Bind() {
         Init();
 
         glBindFramebuffer(GL_FRAMEBUFFER, mId);
     }
 
+    /**
+     * @brief Use this to render stuff on screen after using "Bind()"
+     * 
+     */
     void Unbind() {
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
     }
 
+    /**
+     * @brief Get the Color Texture
+     * 
+     * @param width width of texture
+     * @param height height of texture
+     */
     void GetColorTexture(int width, int height) {
         Bind();
 
@@ -6834,6 +6890,12 @@ public:
         Unbind();
     }
 
+    /**
+     * @brief Get the Depth Texture
+     * 
+     * @param width width of texture
+     * @param height height of texture
+     */
     void GetDepthTexture(int width, int height) {
         Bind();
 
@@ -6852,9 +6914,16 @@ public:
         Unbind();
     }
 
+    /**
+     * @brief Get the Depth and Stencil Texture
+     * 
+     * @param width width of texture
+     * @param height height of texture
+     */
     void GetDepthStencilTexture(int width, int height) {
         Bind();
 
+        // we need texture
         mFBTexture.Bind();
 
         glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, width, height, 0, GL_DEPTH24_STENCIL8, GL_UNSIGNED_INT_24_8, nullptr);
@@ -6867,6 +6936,10 @@ public:
         Unbind();
     }
 
+    /**
+     * @brief Destroy the Framebuffer object
+     * 
+     */
     ~Framebuffer() {
         if(mCreated) {
             glDeleteFramebuffers(1, &mId);
@@ -6876,23 +6949,579 @@ public:
     }
 };
 
+/**
+ * @brief This is like framebuffer but better becouse renderbuffers have depth and are written to memory buffer inseatd of texture, this means that framerate doesn`t like it
+ * 
+ */
+class Renderbuffer {
+private:
+    uint32_t mId;
+    bool mCreated = false;
+
+public:
+    void Init() {
+        if(!mCreated) {
+            glGenRenderbuffers(1, &mId);
+            mCreated = true;
+        }
+    }
+
+    void Bind() {
+        Init();
+
+        glBindRenderbuffer(GL_RENDERBUFFER, mId);
+    }
+
+    void Unbind() {
+        glBindRenderbuffer(GL_RENDERBUFFER, 0);
+    }
+
+    /**
+     * @brief Create a Storage for Renderbuffer from framebuffer
+     * 
+     * @param pFb framebuffer pointer
+     * @param width width of texture
+     * @param height height of texture
+     */
+    void CreateStorage(Framebuffer* pFb, int width, int height) {
+        Bind();
+        // We need framebuffer
+        pFb->Bind();
+
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width, height);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, mId);
+
+        pFb->GetColorTexture(width, height);
+
+        pFb->Unbind();
+        Unbind();
+    }
+    
+    /**
+     * @brief Destroy the Renderbuffer object
+     * 
+     */
+    ~Renderbuffer() {
+        if(mCreated) {
+            glDeleteRenderbuffers(1, &mId);
+            mCreated = false;
+            mId = 0;
+        }
+    }
+};
+
+/**
+ * @brief What our PLY mesh have
+ * 
+ */
+enum MeshSourceInfo {
+    MeshSourceInfo_Vertices = 1,
+    MeshSourceInfo_Normals = 2,
+    MeshSourceInfo_TextureCoordinates = 4
+};
+
+/**
+ * @brief Mesh data
+ * 
+ */
+struct Mesh {
+    std::vector<float> mVertices;
+    std::vector<float> mTextureCoords;
+    std::vector<float> mNormals;
+};
+
+/**
+ * @brief Load binary PLY mesh from memory (source)
+ * 
+ * @param src source of loaded ply mesh
+ * @param headerEnd end of ply header
+ * @param verticesAmount amount of vertices in source
+ * @param facesAmount amount of faces in source
+ * @param meshSourceInfo what our ply mesh have
+ * @return Mesh what you expect it to return else than "Mesh"
+ */
+Mesh __PLYMeshSourceBinary(std::string &src, std::size_t headerEnd, uint64_t verticesAmount, uint64_t facesAmount, uint8_t meshSourceInfo) {
+    Mesh tmp;
+    Mesh result;
+
+    uint8_t multiplier = 0;
+
+    // Check that we have in mesh and add it to multiplier
+    if(meshSourceInfo & MeshSourceInfo_Vertices) multiplier += 3;
+    if(meshSourceInfo & MeshSourceInfo_Normals) multiplier += 3;
+    if(meshSourceInfo & MeshSourceInfo_TextureCoordinates) multiplier += 2;
+
+    // If we have nothing add 1 to crash program
+    if(multiplier == 0) multiplier += 1;
+
+    // Loop over all vertices and load them to temporary mesh
+    for(std::size_t i = 0; i < verticesAmount; i++) {
+        // We need offset to first vertex
+        const uint32_t vertexOffset = headerEnd + 11;
+
+        if(meshSourceInfo & MeshSourceInfo_Vertices) {
+            // As it should be little endian load 3 vertices
+            uint32_t ix = (
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 0)])        |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 1)]) << 8   |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 2)]) << 16  |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 3)]) << 24 
+            );
+
+            uint32_t iy = (
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 4)])        |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 5)]) << 8   |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 6)]) << 16  |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 7)]) << 24 
+            );
+
+            uint32_t iz = (
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 8)])        |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 9)]) << 8   |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 10)]) << 16 |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 11)]) << 24 
+            );
+
+            // Recast our 3 vertices to floats (more usable than integers)
+            tmp.mVertices.push_back(std::bit_cast<float>(ix));
+            tmp.mVertices.push_back(std::bit_cast<float>(iy));
+            tmp.mVertices.push_back(std::bit_cast<float>(iz));
+        }
+
+        if(meshSourceInfo & (MeshSourceInfo_Normals | MeshSourceInfo_TextureCoordinates)) {
+            // Same as vertices
+            uint32_t inx = (
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 12)])        |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 13)]) << 8   |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 14)]) << 16  |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 15)]) << 24 
+            );
+
+            uint32_t iny = (
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 16)])        |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 17)]) << 8   |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 18)]) << 16  |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 19)]) << 24 
+            );
+
+            uint32_t inz = (
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 20)])        |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 21)]) << 8   |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 22)]) << 16  |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 23)]) << 24 
+            );
+
+            uint32_t is = (
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 24)])        |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 25)]) << 8   |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 26)]) << 16  |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 27)]) << 24 
+            );
+
+            uint32_t it = (
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 28)])        |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 29)]) << 8   |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 30)]) << 16  |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 31)]) << 24 
+            );
+
+            tmp.mNormals.push_back(std::bit_cast<float>(inx));
+            tmp.mNormals.push_back(std::bit_cast<float>(iny));
+            tmp.mNormals.push_back(std::bit_cast<float>(inz));
+            tmp.mTextureCoords.push_back(std::bit_cast<float>(is));
+            tmp.mTextureCoords.push_back(std::bit_cast<float>(it));
+        }
+        else if(meshSourceInfo & MeshSourceInfo_Normals && !(meshSourceInfo & MeshSourceInfo_TextureCoordinates)) {
+            // Same as vertices
+            uint32_t inx = (
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 12)])        |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 13)]) << 8   |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 14)]) << 16  |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 15)]) << 24 
+            );
+
+            uint32_t iny = (
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 16)])        |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 17)]) << 8   |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 18)]) << 16  |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 19)]) << 24 
+            );
+
+            uint32_t inz = (
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 20)])        |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 21)]) << 8   |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 22)]) << 16  |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 23)]) << 24 
+            );
+
+            tmp.mNormals.push_back(std::bit_cast<float>(inx));
+            tmp.mNormals.push_back(std::bit_cast<float>(iny));
+            tmp.mNormals.push_back(std::bit_cast<float>(inz));
+        }
+        else if(!(meshSourceInfo & MeshSourceInfo_Normals) && meshSourceInfo & MeshSourceInfo_TextureCoordinates) {
+            // Same as vertices
+            uint32_t is = (
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 12)])        |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 13)]) << 8   |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 14)]) << 16  |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 15)]) << 24 
+            );
+
+            uint32_t it = (
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 16)])        |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 17)]) << 8   |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 18)]) << 16  |
+                (uint32_t)((uint8_t)src[vertexOffset + (i * multiplier * sizeof(float) + 19)]) << 24 
+            );
+
+            tmp.mTextureCoords.push_back(std::bit_cast<float>(is));
+            tmp.mTextureCoords.push_back(std::bit_cast<float>(it));
+        }
+    }
+
+    uint32_t index = 0;
+
+    for(std::size_t i = 0; i < facesAmount; i++) {
+        const uint32_t facesOffset = headerEnd + 11 + (sizeof(float) * multiplier * verticesAmount);
+
+        // Get number of indices to join
+        uint8_t indicesAmount = (uint8_t)src[facesOffset + index];
+
+        if(indicesAmount == 3) {
+            // Get indices
+            uint32_t ix = (
+                (uint32_t)((uint8_t)src[facesOffset + (index + 1)])            |
+                (uint32_t)((uint8_t)src[facesOffset + (index + 2)]) << 8       |
+                (uint32_t)((uint8_t)src[facesOffset + (index + 3)]) << 16      |
+                (uint32_t)((uint8_t)src[facesOffset + (index + 4)]) << 24
+            );
+
+            uint32_t iy = (
+                (uint32_t)((uint8_t)src[facesOffset + (index + 5)])            |
+                (uint32_t)((uint8_t)src[facesOffset + (index + 6)]) << 8       |
+                (uint32_t)((uint8_t)src[facesOffset + (index + 7)]) << 16      |
+                (uint32_t)((uint8_t)src[facesOffset + (index + 8)]) << 24
+            );
+
+            uint32_t iz = (
+                (uint32_t)((uint8_t)src[facesOffset + (index + 9)])            |
+                (uint32_t)((uint8_t)src[facesOffset + (index + 10)]) << 8      |
+                (uint32_t)((uint8_t)src[facesOffset + (index + 11)]) << 16     |
+                (uint32_t)((uint8_t)src[facesOffset + (index + 12)]) << 24
+            );
+
+            index += 13;
+
+            // Make vertices
+
+            if(meshSourceInfo & MeshSourceInfo_Vertices) {
+                result.mVertices.push_back(tmp.mVertices[ix * 3 + 0]);
+                result.mVertices.push_back(tmp.mVertices[ix * 3 + 1]);
+                result.mVertices.push_back(tmp.mVertices[ix * 3 + 2]);
+
+                result.mVertices.push_back(tmp.mVertices[iy * 3 + 0]);
+                result.mVertices.push_back(tmp.mVertices[iy * 3 + 1]);
+                result.mVertices.push_back(tmp.mVertices[iy * 3 + 2]);
+
+                result.mVertices.push_back(tmp.mVertices[iz * 3 + 0]);
+                result.mVertices.push_back(tmp.mVertices[iz * 3 + 1]);
+                result.mVertices.push_back(tmp.mVertices[iz * 3 + 2]);
+            }
+
+            if(meshSourceInfo & MeshSourceInfo_Normals) {
+                result.mNormals.push_back(tmp.mNormals[ix * 3 + 0]);
+                result.mNormals.push_back(tmp.mNormals[ix * 3 + 1]);
+                result.mNormals.push_back(tmp.mNormals[ix * 3 + 2]);
+
+                result.mNormals.push_back(tmp.mNormals[iy * 3 + 0]);
+                result.mNormals.push_back(tmp.mNormals[iy * 3 + 1]);
+                result.mNormals.push_back(tmp.mNormals[iy * 3 + 2]);
+
+                result.mNormals.push_back(tmp.mNormals[iz * 3 + 0]);
+                result.mNormals.push_back(tmp.mNormals[iz * 3 + 1]);
+                result.mNormals.push_back(tmp.mNormals[iz * 3 + 2]);
+            }
+
+            if(meshSourceInfo & MeshSourceInfo_TextureCoordinates) {
+                result.mTextureCoords.push_back(tmp.mTextureCoords[ix * 2 + 0]);
+                result.mTextureCoords.push_back(tmp.mTextureCoords[ix * 2 + 1]);
+
+                result.mTextureCoords.push_back(tmp.mTextureCoords[iy * 2 + 0]);
+                result.mTextureCoords.push_back(tmp.mTextureCoords[iy * 2 + 1]);
+
+                result.mTextureCoords.push_back(tmp.mTextureCoords[iz * 2 + 0]);
+                result.mTextureCoords.push_back(tmp.mTextureCoords[iz * 2 + 1]);
+            }
+        }
+        else if(indicesAmount == 4) {
+            uint32_t ix = (
+                (uint32_t)((uint8_t)src[facesOffset + (index + 1)])            |
+                (uint32_t)((uint8_t)src[facesOffset + (index + 2)]) << 8       |
+                (uint32_t)((uint8_t)src[facesOffset + (index + 3)]) << 16      |
+                (uint32_t)((uint8_t)src[facesOffset + (index + 4)]) << 24
+            );
+
+            uint32_t iy = (
+                (uint32_t)((uint8_t)src[facesOffset + (index + 5)])            |
+                (uint32_t)((uint8_t)src[facesOffset + (index + 6)]) << 8       |
+                (uint32_t)((uint8_t)src[facesOffset + (index + 7)]) << 16      |
+                (uint32_t)((uint8_t)src[facesOffset + (index + 8)]) << 24
+            );
+
+            uint32_t iz = (
+                (uint32_t)((uint8_t)src[facesOffset + (index + 9)])            |
+                (uint32_t)((uint8_t)src[facesOffset + (index + 10)]) << 8      |
+                (uint32_t)((uint8_t)src[facesOffset + (index + 11)]) << 16     |
+                (uint32_t)((uint8_t)src[facesOffset + (index + 12)]) << 24
+            );
+
+            uint32_t iw = (
+                (uint32_t)((uint8_t)src[facesOffset + (index + 13)])           |
+                (uint32_t)((uint8_t)src[facesOffset + (index + 14)]) << 8      |
+                (uint32_t)((uint8_t)src[facesOffset + (index + 15)]) << 16     |
+                (uint32_t)((uint8_t)src[facesOffset + (index + 16)]) << 24
+            );
+
+            index += 17;
+
+            if(meshSourceInfo & MeshSourceInfo_Vertices) {
+                result.mVertices.push_back(tmp.mVertices[ix * 3 + 0]);
+                result.mVertices.push_back(tmp.mVertices[ix * 3 + 1]);
+                result.mVertices.push_back(tmp.mVertices[ix * 3 + 2]);
+
+                result.mVertices.push_back(tmp.mVertices[iy * 3 + 0]);
+                result.mVertices.push_back(tmp.mVertices[iy * 3 + 1]);
+                result.mVertices.push_back(tmp.mVertices[iy * 3 + 2]);
+
+                result.mVertices.push_back(tmp.mVertices[iz * 3 + 0]);
+                result.mVertices.push_back(tmp.mVertices[iz * 3 + 1]);
+                result.mVertices.push_back(tmp.mVertices[iz * 3 + 2]);
+
+                result.mVertices.push_back(tmp.mVertices[ix * 3 + 0]);
+                result.mVertices.push_back(tmp.mVertices[ix * 3 + 1]);
+                result.mVertices.push_back(tmp.mVertices[ix * 3 + 2]);
+
+                result.mVertices.push_back(tmp.mVertices[iz * 3 + 0]);
+                result.mVertices.push_back(tmp.mVertices[iz * 3 + 1]);
+                result.mVertices.push_back(tmp.mVertices[iz * 3 + 2]);
+
+                result.mVertices.push_back(tmp.mVertices[iw * 3 + 0]);
+                result.mVertices.push_back(tmp.mVertices[iw * 3 + 1]);
+                result.mVertices.push_back(tmp.mVertices[iw * 3 + 2]);
+            }
+
+            if(meshSourceInfo & MeshSourceInfo_Normals) {
+                result.mNormals.push_back(tmp.mNormals[ix * 3 + 0]);
+                result.mNormals.push_back(tmp.mNormals[ix * 3 + 1]);
+                result.mNormals.push_back(tmp.mNormals[ix * 3 + 2]);
+
+                result.mNormals.push_back(tmp.mNormals[iy * 3 + 0]);
+                result.mNormals.push_back(tmp.mNormals[iy * 3 + 1]);
+                result.mNormals.push_back(tmp.mNormals[iy * 3 + 2]);
+
+                result.mNormals.push_back(tmp.mNormals[iz * 3 + 0]);
+                result.mNormals.push_back(tmp.mNormals[iz * 3 + 1]);
+                result.mNormals.push_back(tmp.mNormals[iz * 3 + 2]);
+
+                result.mNormals.push_back(tmp.mNormals[ix * 3 + 0]);
+                result.mNormals.push_back(tmp.mNormals[ix * 3 + 1]);
+                result.mNormals.push_back(tmp.mNormals[ix * 3 + 2]);
+
+                result.mNormals.push_back(tmp.mNormals[iz * 3 + 0]);
+                result.mNormals.push_back(tmp.mNormals[iz * 3 + 1]);
+                result.mNormals.push_back(tmp.mNormals[iz * 3 + 2]);
+
+                result.mNormals.push_back(tmp.mNormals[iw * 3 + 0]);
+                result.mNormals.push_back(tmp.mNormals[iw * 3 + 1]);
+                result.mNormals.push_back(tmp.mNormals[iw * 3 + 2]);
+            }
+
+            if(meshSourceInfo & MeshSourceInfo_TextureCoordinates) {
+                result.mTextureCoords.push_back(tmp.mTextureCoords[ix * 2 + 0]);
+                result.mTextureCoords.push_back(tmp.mTextureCoords[ix * 2 + 1]);
+
+                result.mTextureCoords.push_back(tmp.mTextureCoords[iy * 2 + 0]);
+                result.mTextureCoords.push_back(tmp.mTextureCoords[iy * 2 + 1]);
+
+                result.mTextureCoords.push_back(tmp.mTextureCoords[iz * 2 + 0]);
+                result.mTextureCoords.push_back(tmp.mTextureCoords[iz * 2 + 1]);
+
+                result.mTextureCoords.push_back(tmp.mTextureCoords[ix * 2 + 0]);
+                result.mTextureCoords.push_back(tmp.mTextureCoords[ix * 2 + 1]);
+
+                result.mTextureCoords.push_back(tmp.mTextureCoords[iz * 2 + 0]);
+                result.mTextureCoords.push_back(tmp.mTextureCoords[iz * 2 + 1]);
+
+                result.mTextureCoords.push_back(tmp.mTextureCoords[iw * 2 + 0]);
+                result.mTextureCoords.push_back(tmp.mTextureCoords[iw * 2 + 1]);
+            }
+        }
+    }
+
+    return result;
+}
+
+/**
+ * @brief Load PLY mesh from file
+ * 
+ * @param path path to file
+ * @return Mesh 
+ */
+Mesh LoadPLYMesh(std::string path) {
+    std::ifstream file;
+    file.open(path, std::ios::binary | std::ios::ate);
+
+    uint32_t len = file.tellg();
+    file.seekg(0, std::ios::beg);
+
+    std::string src;
+    src.resize(len);
+
+    file.read((char*)src.data(), src.size());
+
+    file.close();
+
+    std::size_t plyMV = src.find("ply");
+
+    if(plyMV == std::string::npos) return Mesh();
+
+    std::size_t formatOff = src.find("format binary_little_endian");
+    std::size_t verticesAmountOff = src.find("element vertex") ;
+    std::size_t verticesOff = src.find("property float x");
+    std::size_t normalsOff = src.find("property float nx");
+    std::size_t textureCoordsOff = src.find("property float s");
+    std::size_t facesAmountOff = src.find("element face");
+    std::size_t headerEnd = src.find("end_header");
+
+    uint64_t verticesAmount = std::stoi(std::string(src.begin() + verticesAmountOff + 15, src.begin() + src.find_first_of('\n', verticesAmountOff)));
+    uint64_t facesAmount = std::stoi(std::string(src.begin() + facesAmountOff + 13, src.begin() + src.find_first_of('\n', facesAmountOff)));
+
+    if(formatOff != std::string::npos) {
+        return __PLYMeshSourceBinary(src, headerEnd, verticesAmount, facesAmount, (verticesOff != std::string::npos ? MeshSourceInfo_Vertices : 0) | (normalsOff != std::string::npos ? MeshSourceInfo_Normals : 0) | (textureCoordsOff != std::string::npos ? MeshSourceInfo_TextureCoordinates : 0));
+    }
+
+    return Mesh();
+}
+
+// Offsets
+#define DONT_CARE_OFFSET        0xd
+#define HEADER_SIZE             0xe
+#define BM_WIDTH                0x12
+#define BM_HEIGHT               0x16
+#define BM_BITS_PER_PIXEL       0x1c
+
+// Values
+#define BM_BPP_1                0x1
+#define BM_BPP_4                0x4
+#define BM_BPP_8                0x8
+#define BM_BPP_16               0x10
+#define BM_BPP_24               0x18
+#define BM_BPP_32               0x20
+
+std::vector<uint8_t> LoadBitmap(std::string filename, uint32_t* w, uint32_t* h, bool recieveSizes = true) {
+    *w = 0;
+    *h = 0;
+
+    uint32_t headerSize = 0;
+    uint32_t *width = w, *height = h;
+    uint16_t bitsPerPixel = 0;
+
+    std::ifstream f(filename, std::ios_base::binary);
+
+    f.seekg(HEADER_SIZE, std::ios_base::beg);
+
+    for(uint32_t i = 0; i < 4; i++) {
+        uint32_t cc = f.get();
+
+        headerSize |= cc << (i * 8);
+    }
+
+    if(recieveSizes) {
+        f.seekg(BM_WIDTH, std::ios_base::beg);
+
+        for(uint32_t i = 0; i < 4; i++) {
+            uint32_t cc = f.get();
+
+            *width |= cc << (i * 8);
+        }
+
+        f.seekg(BM_HEIGHT, std::ios_base::beg);
+
+        for(uint32_t i = 0; i < 4; i++) {
+            uint32_t cc = f.get();
+
+            *height |= cc << (i * 8);
+        }
+    }
+
+    f.seekg(BM_BITS_PER_PIXEL, std::ios_base::beg);
+
+    for(uint32_t i = 0; i < 2; i++) {
+        uint32_t cc = f.get();
+
+        bitsPerPixel |= cc << (i * 8);
+    }
+
+    f.seekg(headerSize + DONT_CARE_OFFSET + 1, std::ios_base::beg);
+
+    std::vector<uint8_t> result;
+    uint32_t bytesCounter = (bitsPerPixel / 8) - 1;
+
+    uint8_t bytes[4] = {0, 0, 0, 0};
+
+    while(!f.eof()) {
+        uint32_t cc = f.get();
+
+        bytes[bytesCounter] = cc;
+
+        if(bytesCounter == 0) {
+            bytesCounter = (bitsPerPixel / 8);
+            for(uint32_t i = 0; i < (bitsPerPixel / 8); i++) {
+                result.push_back(bytes[i]);
+            }
+
+            if((bitsPerPixel / 8) == 3) {
+                result.push_back(0xff);
+            }
+        }
+
+        if(bytesCounter > 0) {
+            bytesCounter--;
+        }
+
+    }
+
+    f.close();
+
+    return result;
+}
+
+// White texture
 Texture gWhite;
 
+/**
+ * @brief Main window class 
+ * 
+ */
 class Window {
 private:
     GLFWwindow* mWindow;
 
 public:
+    // Some statics, quite understandable by name
     static int sWidth, sHeight;
     static double sTime, sLateTime, sDeltaTime;
     static double sMouseX, sMouseY;
 
+    // Sometimes usefull
     GLFWwindow* operator()() { return mWindow; }
     
+    // Virtual methods
     virtual void Start() {}
     virtual void Update() {}
     virtual void LateUpdate() {}
 
+    // Some wraps
     bool GetKey(int key, int retVal = GLFW_PRESS) { return glfwGetKey(mWindow, key) == retVal; }
     bool GetMouse(int mb, int retVal = GLFW_PRESS) { return glfwGetMouseButton(mWindow, mb) == retVal; }
 
@@ -6902,32 +7531,41 @@ public:
     void DisableCursor() { glfwSetInputMode(mWindow, GLFW_CURSOR, GLFW_CURSOR_DISABLED); } 
     void EnableCursor() { glfwSetInputMode(mWindow, GLFW_CURSOR, GLFW_CURSOR_NORMAL); } 
 
-    void Run(const char* title, int width, int height) {
+    // Main function for handling window
+    void Run(const char* title, int width, int height, bool maximize = false) {
         glfwInit();
 
+        // We want OpenGL 4.5 core context, 16 samples per pixel(multisampling)
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 5);
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+        if(maximize) glfwWindowHint(GLFW_MAXIMIZED, GLFW_TRUE);
         glfwWindowHint(GLFW_SAMPLES, 16);
 
         mWindow = glfwCreateWindow(width, height, title, nullptr, nullptr);
 
+        // No window = no more code executed
         if(!mWindow) {
             return;
         }
 
         glfwMakeContextCurrent(mWindow);
 
+        // No OpenGL 4.5 = no more code executed
         if(!gladLoadGL((GLADloadfunc)glfwGetProcAddress)) {
             return;
         }
 
+        // Depth is quite usefull in 3D applications
         glEnable(GL_DEPTH_TEST);
+        // We want mulitsampling as we set in glfw
         glEnable(GL_MULTISAMPLE);
+        // Blending for alpha (looks better)
         glEnable(GL_BLEND);
 
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
+        // Init for text
         __gTextVertexShader = glCreateShader(GL_VERTEX_SHADER);
         glShaderSource(__gTextVertexShader, 1, &__gTextVertexShaderSource, nullptr);
         glCompileShader(__gTextVertexShader);
@@ -6940,6 +7578,10 @@ public:
         glAttachShader(__gTextShaderProgram, __gTextVertexShader);
         glAttachShader(__gTextShaderProgram, __gTextFragmentShader);
         glLinkProgram(__gTextShaderProgram);
+
+        glUniformMatrix4fv(glGetUniformLocation(__gTextShaderProgram, "uProjection"), 1, 0, _gProjection.m);
+        glUniformMatrix4fv(glGetUniformLocation(__gTextShaderProgram, "uView"), 1, 0, _gView.m);
+        glUniformMatrix4fv(glGetUniformLocation(__gTextShaderProgram, "uTransform"), 1, 0, _gTransform.m);
 
         glGenVertexArrays(1, &__gTextVArray);
         glBindVertexArray(__gTextVArray);
@@ -6957,6 +7599,7 @@ public:
 
         glBindVertexArray(0);
 
+        // Init for main renderer
         __gVertexShader = glCreateShader(GL_VERTEX_SHADER);
         glShaderSource(__gVertexShader, 1, &__gVertexShaderSource, nullptr);
         glCompileShader(__gVertexShader);
@@ -7040,12 +7683,16 @@ public:
 
         glBindVertexArray(0);
 
+        // Would be good to execute virtual methods
         Start();
 
         while(!glfwWindowShouldClose(mWindow)) {
+            // Clearing color and depth
             glClear(0x4100);
+            // Filling screen with gray 
             glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
 
+            // Setting our statics
             Window::sTime = glfwGetTime();
             Window::sDeltaTime = Window::sTime - Window::sLateTime;
             Window::sLateTime = Window::sTime;
@@ -7053,6 +7700,7 @@ public:
             glfwGetWindowSize(mWindow, &Window::sWidth, &Window::sHeight);
             glfwGetCursorPos(mWindow, &Window::sMouseX, &Window::sMouseY);
 
+            // Need to set viewport to window size
             glViewport(0, 0, Window::sWidth, Window::sHeight);
 
             Update();
@@ -7064,6 +7712,7 @@ public:
             glfwPollEvents();
         }
 
+        // Clearing memory could be good practise
         glDeleteShader(__gVertexShader);
         glDeleteShader(__gFragmentShader);
         glDeleteProgram(__gShaderProgram);
@@ -7464,6 +8113,10 @@ void RenderText(std::string text, RVec pos, float pointSize = 1.0f) {
     glUseProgram(__gTextShaderProgram);
     glBindVertexArray(__gTextVArray);
 
+    glUniformMatrix4fv(glGetUniformLocation(__gTextShaderProgram, "uProjection"), 1, 0, _gProjection.m);
+    glUniformMatrix4fv(glGetUniformLocation(__gTextShaderProgram, "uView"), 1, 0, _gView.m);
+    glUniformMatrix4fv(glGetUniformLocation(__gTextShaderProgram, "uTransform"), 1, 0, _gTransform.m);
+
     glBindBuffer(GL_ARRAY_BUFFER, __gTextVBPosition);
     glBufferData(GL_ARRAY_BUFFER, sizeof(float) * vertices.size(), vertices.data(), GL_DYNAMIC_DRAW);
 
@@ -7483,5 +8136,55 @@ void RenderText(std::string text, RVec pos, float pointSize = 1.0f) {
     glBindVertexArray(0);
     glUseProgram(0);
 }
+
+bool AABBCollider(RVec pos1, RVec siz1, RVec pos2, RVec siz2) {
+    bool cX = (pos1 + siz1).x <= (pos2 - siz2).x && (pos2 + siz2).x <= (pos1 - siz1).x;
+    bool cY = (pos1 + siz1).y <= (pos2 - siz2).y && (pos2 + siz2).y <= (pos1 - siz1).y;
+    bool cZ = (pos1 + siz1).z <= (pos2 - siz2).z && (pos2 + siz2).z <= (pos1 - siz1).z;
+
+    return cX && cY && cZ;
+}
+
+bool AABBPlaneCollider(RVec pos1, RVec siz1, RVec p1, RVec p2, RVec p3) {
+    RVec normal = RVec::PlaneNormal(p1, p2, p3);
+
+    RVec planePoint = (pos1 - (normal * siz1)) - (normal * (normal.Dot((pos1 - (normal * siz1)) - p1)));
+    RVec planePoint2 = (pos1 + (normal * siz1)) - (normal * (normal.Dot((pos1 + (normal * siz1)) - p1)));
+
+    return AABBCollider(pos1, siz1, planePoint, RVec(0.01f)) || AABBCollider(pos1, siz1, planePoint2, RVec(0.01f));
+}
+
+class Particle {
+public:
+    real mBounce = 0.0f;
+    real mFriction = 0.0f;
+    real mHighFriction = 0.0f;
+    real mDrag = 0.005f;
+    RVec mGravity = RVec(0.0f, -9.8f);
+    RVec mVelocity = RVec();
+    RVec mLastPosition = RVec();
+    RVec mPosition = RVec();
+
+    void Update(real deltaTime) {
+        mLastPosition = mPosition;
+        mVelocity += mGravity * deltaTime;
+        mVelocity *= (1.0f - mDrag);
+        mPosition += mVelocity * deltaTime;
+    }
+
+    void ResolveCollision(RVec push) {
+        mPosition += push;
+
+        real kinetic = mFriction;
+
+        if(mHighFriction > 0.0f) {
+            real velo = mVelocity.Length() / mHighFriction;
+            kinetic = std::min(mFriction * (velo + 5.0f) / (velo + 1.0f), 1.0f);
+        }
+
+        RVec reaction = push * (mVelocity.Dot(push) / push.Dot(push));
+        mVelocity = (mVelocity - reaction) * (1.0f - kinetic) - reaction * mBounce;
+    }
+};
 
 #endif
