@@ -5804,7 +5804,7 @@ public:
      * @return Vector<T>
      */
     inline static Vector<T> PlaneNormal(Vector<T> pv1, Vector<T> pv2, Vector<T> pv3) {
-        return (pv2 - pv1).Cross(pv3 - pv1).Normalize();
+        return ((pv1 - pv2).Cross(pv1 - pv3)).Normalize();
     }
 
     inline Vector<T> Abs() { return Vector<T>(std::abs(this->x), std::abs(this->y), std::abs(this->z), std::abs(this->w)); }
@@ -8145,6 +8145,14 @@ bool AABBCollider(RVec pos1, RVec siz1, RVec pos2, RVec siz2) {
     return cX && cY && cZ;
 }
 
+bool AABBPointCollider(RVec pos, RVec size, RVec point) {
+    bool collX = point.x >= pos.x - size.x && point.x <= pos.x + size.x;
+    bool collY = point.y >= pos.y - size.y && point.y <= pos.y + size.y;
+    bool collZ = point.z >= pos.z - size.z && point.z <= pos.z + size.z;
+
+    return collX && collY && collZ;
+}
+
 bool AABBPlaneCollider(RVec pos1, RVec siz1, RVec p1, RVec p2, RVec p3) {
     RVec normal = RVec::PlaneNormal(p1, p2, p3);
 
@@ -8152,6 +8160,10 @@ bool AABBPlaneCollider(RVec pos1, RVec siz1, RVec p1, RVec p2, RVec p3) {
     RVec planePoint2 = (pos1 + (normal * siz1)) - (normal * (normal.Dot((pos1 + (normal * siz1)) - p1)));
 
     return AABBCollider(pos1, siz1, planePoint, RVec(0.01f)) || AABBCollider(pos1, siz1, planePoint2, RVec(0.01f));
+}
+
+bool SphereCollider(RVec pos1, RVec pos2, real r1, real r2) {
+    return pos1.Distance(pos2) <= r1 + r2;
 }
 
 class Particle {

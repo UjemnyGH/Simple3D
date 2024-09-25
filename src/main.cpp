@@ -1,4 +1,5 @@
 #include "simple3d.hpp"
+#include <sstream>
 
 class Wnd : public Window {
 public:
@@ -6,10 +7,10 @@ public:
     std::vector<float> colors;
     Texture map1Texture;
     Particle player;
-    RVec playerSize = RVec(0.2f, 0.5f, 0.2f);
+    RVec playerSize = RVec(0.6f, 1.6f, 0.6f);
     std::vector<RVec> shortestPoints;
+    std::vector<RVec> shortestPointsNormals;
     bool physicsSwitch = false;
-    real shortestDistance = 100000.0f;
 
     virtual void Start() override {
         map1 = LoadPLYMesh("map1.ply");
@@ -59,11 +60,11 @@ public:
     RMat mapTransform = RMat::Identity();
 
     virtual void Update() override {
-        SetRotation(RVec(Window::sTime));
+        //SetRotation(RVec(Window::sTime));
         SetProjection(ToRadians(90.0f));
-        SetView(player.mPosition + front, player.mPosition);
-        UseTexture(&gWhite);
-        RenderCube(RVec(), RVec(0.3f), RVec(1.0f));
+        SetView(player.mPosition + front + RVec(0.0f, 0.8f), player.mPosition + RVec(0.0f, 0.8f));
+        //UseTexture(&gWhite);
+        //RenderCube(RVec(), RVec(0.3f), RVec(1.0f));
 
         UseTexture(&map1Texture);
         SetRotation(RVec());
@@ -78,19 +79,29 @@ public:
 
         glLineWidth(4.0f);
         UseTexture(&gWhite);
-        for(auto vec : shortestPoints) {
-            if(vec.w == 1.0f) {
-                RenderLine(player.mPosition - RVec(0.2f), vec, RVec(0.0f, 1.0f, 0.0f, 1.0f));
-                RenderCube(vec, RVec(0.08f), RVec(0.0f, 0.0f, 1.0f, 1.0f));
-            }
+        for(uint32_t i = 0; i < shortestPoints.size(); i++) {
+            RenderLine(player.mPosition - RVec(0.2f), shortestPoints[i], RVec(0.0f, 1.0f, 0.0f, 1.0f));
+            RenderLine(shortestPoints[i], shortestPoints[i] + shortestPointsNormals[i], RVec(1.0f, 1.0f, 0.0f, 1.0f));
+            RenderCube(shortestPoints[i], RVec(0.08f), RVec(0.0f, 0.0f, 1.0f, 1.0f));
         }
+
+        RenderLine(RVec(0.0f), RVec::Cross(RVec(-1.0f, 0.0f, 1.0f), RVec(cos(Window::sTime), sin(Window::sTime), 1.0f)).Normalize(), RVec(1.0f));
+        RenderLine(RVec(0.0f), RVec(-1.0f, 0.0f, 1.0f), RVec(1.0f));
+        RenderLine(RVec(0.0f), RVec(cos(Window::sTime), sin(Window::sTime), 1.0f), RVec(1.0f));
 
         _gView = RMat::Identity();
         _gTransform = RMat::Identity();
         _gProjection = RMat::Identity();
         RenderText("Pos X:" + std::to_string(player.mPosition.x) + " Y:" + std::to_string(player.mPosition.y) + " Z:" + std::to_string(player.mPosition.z), RVec(-0.9f, 0.9f), 2.0f);
         RenderText("\x1b[00fPhysics: " + (physicsSwitch == true ? std::string("1") : std::string("0")), RVec(0.7f, 0.9f), 2.0f);
-        RenderText("\x1b[0f0Distance: " + std::to_string(shortestDistance), RVec(-0.9f, 0.8f), 2.0f);
+
+        std::stringstream ss;
+        for(uint32_t i = 0; i < shortestPoints.size(); i++) {
+            if(AABBPointCollider(player.mPosition, playerSize, shortestPoints[i])) {
+                ss << shortestPointsNormals[i] << "\n";
+            }
+        }
+        RenderText(ss.str(), RVec(), 2.0f);
 
         /*fb.Bind();
 
@@ -138,16 +149,14 @@ public:
             player.Update(Window::sDeltaTime);
         }
 
-        shortestDistance = 100000.0f;
-
         shortestPoints.clear();
 
-        RVec normal, v1, v2, v3;
+        RVec normal;
 
         for(uint32_t i = 0; i < map1.mVertices.size() / 9; i++) {
-            RVec p1 = mapTransform * RVec(map1.mVertices[i * 9 + 0], map1.mVertices[i * 9 + 1], map1.mVertices[i * 9 + 2]);
-            RVec p2 = mapTransform * RVec(map1.mVertices[i * 9 + 3], map1.mVertices[i * 9 + 4], map1.mVertices[i * 9 + 5]);
-            RVec p3 = mapTransform * RVec(map1.mVertices[i * 9 + 6], map1.mVertices[i * 9 + 7], map1.mVertices[i * 9 + 8]);
+            RVec pt1 = mapTransform * RVec(map1.mVertices[i * 9 + 0], map1.mVertices[i * 9 + 1], map1.mVertices[i * 9 + 2]);
+            RVec pt2 = mapTransform * RVec(map1.mVertices[i * 9 + 3], map1.mVertices[i * 9 + 4], map1.mVertices[i * 9 + 5]);
+            RVec pt3 = mapTransform * RVec(map1.mVertices[i * 9 + 6], map1.mVertices[i * 9 + 7], map1.mVertices[i * 9 + 8]);
 
             /*RVec normal = RVec::PlaneNormal(p1, p2, p3) / RVec::PlaneNormal(p1, p2, p3).Length();
             real distance = abs(player.mPosition.Dot(normal));
@@ -158,25 +167,20 @@ public:
                 shortestPoint = player.mPosition - (RVec::PlaneNormal(p1, p2, p3) * distance);
             }*/
 
-            real distance = abs(RVec::PlaneNormal(p1, p2, p3).Dot(player.mPosition - p1));
-            RVec point = PointOnPlane(player.mPosition, p1, p2, p3);
 
-            shortestPoints.push_back(point);
+            RVec point = PointOnPlane(player.mPosition, pt1, pt2, pt3);
+            normal = RVec::Cross(pt1 - pt2, pt1 - pt3).Normalize();
 
-            if(distance < shortestDistance) {
-                shortestDistance = distance;
-
-                normal = RVec::PlaneNormal(p1, p2, p3);
-                v1 = p1;
-                v2 = p2;
-                v3 = p3;
+            if(point.w == 1.0f) {
+                shortestPoints.push_back(point);
+                shortestPointsNormals.push_back(normal);
             }
         }
 
         if(physicsSwitch) {
             for(auto point : shortestPoints) {
-                if(AABBCollider(player.mPosition, playerSize, point, RVec(0.05f))) {
-                    player.ResolveCollision(player.mVelocity.Negate());
+                if(AABBPointCollider(player.mPosition, playerSize, point)) {
+                    player.ResolveCollision(normal.Negate() * Window::sDeltaTime);
                 }
             }
         }
