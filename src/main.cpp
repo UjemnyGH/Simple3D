@@ -36,21 +36,27 @@ public:
         map1Texture.LoadTextureFromMemory(map1Pixels, map1TexWidth, map1TexHeight);
     }
 
-    RVec PointOnPlane(RVec pos, RVec size, RVec p1, RVec p2, RVec p3) {
+    RVec PointOnPlane(RVec pos, RVec p1, RVec p2, RVec p3) {
         RVec normal = RVec::PlaneNormal(p1, p2, p3);
+        RVec point = ((p1 - pos).Cross(normal)).Cross(normal) + p1;
+        RVec maxP = RVec(std::max(p1.x, std::max(p2.x, p3.x)), std::max(p1.y, std::max(p2.y, p3.y)), std::max(p1.z, std::max(p2.z, p3.z)));
+        RVec minP = RVec(std::min(p1.x, std::min(p2.x, p3.x)), std::min(p1.y, std::min(p2.y, p3.y)), std::min(p1.z, std::min(p2.z, p3.z)));
 
-        RVec distances = RVec(p1.Distance(pos), p2.Distance(pos), p3.Distance(pos));
-        RVec triDistances = RVec(p1.Distance(p2), p1.Distance(p3), p2.Distance(p3));
+        if(point.x >= minP.x && point.x <= maxP.x && point.y >= minP.y && point.y <= maxP.y && point.z >= minP.z && point.z <= maxP.z) {
+            point.w = 1.0f;
+        }
+        else {
+            point.w = 0.0f;
+        }
 
-        RVec final = RVec(distances.x / triDistances.x, distances.y / triDistances.y, distances.z / triDistances.z);
-
-        return pos - (final *  normal);
+        return point;
     }
 
     RVec front, right;
 
     Framebuffer fb;
     Renderbuffer rb;
+    RMat mapTransform = RMat::Identity();
 
     virtual void Update() override {
         SetRotation(RVec(Window::sTime));
@@ -62,6 +68,7 @@ public:
         UseTexture(&map1Texture);
         SetRotation(RVec());
         SetScale(RVec(10.0f));
+        mapTransform = _gTransform;
         Render(map1.mVertices, colors, map1.mTextureCoords);
 
         SetRotation(RVec());
@@ -72,8 +79,10 @@ public:
         glLineWidth(4.0f);
         UseTexture(&gWhite);
         for(auto vec : shortestPoints) {
-            RenderLine(player.mPosition - RVec(0.2f), vec, RVec(0.0f, 1.0f, 0.0f, 1.0f));
-            RenderCube(vec, RVec(0.02f), RVec(1.0f, 0.0f, 1.0f, 1.0f));
+            if(vec.w == 1.0f) {
+                RenderLine(player.mPosition - RVec(0.2f), vec, RVec(0.0f, 1.0f, 0.0f, 1.0f));
+                RenderCube(vec, RVec(0.08f), RVec(0.0f, 0.0f, 1.0f, 1.0f));
+            }
         }
 
         _gView = RMat::Identity();
@@ -136,9 +145,9 @@ public:
         RVec normal, v1, v2, v3;
 
         for(uint32_t i = 0; i < map1.mVertices.size() / 9; i++) {
-            RVec p1 = _gTransform * RVec(map1.mVertices[i * 9 + 0], map1.mVertices[i * 9 + 1], map1.mVertices[i * 9 + 2]);
-            RVec p2 = _gTransform * RVec(map1.mVertices[i * 9 + 3], map1.mVertices[i * 9 + 4], map1.mVertices[i * 9 + 5]);
-            RVec p3 = _gTransform * RVec(map1.mVertices[i * 9 + 6], map1.mVertices[i * 9 + 7], map1.mVertices[i * 9 + 8]);
+            RVec p1 = mapTransform * RVec(map1.mVertices[i * 9 + 0], map1.mVertices[i * 9 + 1], map1.mVertices[i * 9 + 2]);
+            RVec p2 = mapTransform * RVec(map1.mVertices[i * 9 + 3], map1.mVertices[i * 9 + 4], map1.mVertices[i * 9 + 5]);
+            RVec p3 = mapTransform * RVec(map1.mVertices[i * 9 + 6], map1.mVertices[i * 9 + 7], map1.mVertices[i * 9 + 8]);
 
             /*RVec normal = RVec::PlaneNormal(p1, p2, p3) / RVec::PlaneNormal(p1, p2, p3).Length();
             real distance = abs(player.mPosition.Dot(normal));
@@ -150,7 +159,7 @@ public:
             }*/
 
             real distance = abs(RVec::PlaneNormal(p1, p2, p3).Dot(player.mPosition - p1));
-            RVec point = PointOnPlane(player.mPosition, playerSize, p1, p2, p3);
+            RVec point = PointOnPlane(player.mPosition, p1, p2, p3);
 
             shortestPoints.push_back(point);
 
@@ -165,15 +174,10 @@ public:
         }
 
         if(physicsSwitch) {
-            RVec bestPoint = RVec(100000.0f);
             for(auto point : shortestPoints) {
-                if(abs(point.Distance(player.mPosition)) < abs(bestPoint.Distance(player.mPosition))) {
-                    bestPoint = point;
+                if(AABBCollider(player.mPosition, playerSize, point, RVec(0.05f))) {
+                    player.ResolveCollision(player.mVelocity.Negate());
                 }
-            }
-
-            if(AABBCollider(player.mPosition, playerSize, bestPoint, RVec(0.05f))) {
-                player.ResolveCollision(player.mVelocity.Negate());
             }
         }
 

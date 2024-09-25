@@ -5758,14 +5758,14 @@ public:
      * 
      * @return Vector<T>
      */
-    inline Vector<T> Normalize() { return *this * (static_cast<T>(1) / Length()); }
+    inline Vector<T> Normalize() { return *this * RSqrt32(Dot(*this)); }
 
     /**
      * @brief Normalized vector
      * 
      * @return Vector<T>
      */
-    inline static Vector<T> Normalize(Vector<T> v) { return v * (static_cast<T>(1) / Vector<T>::Length(v)); }
+    inline static Vector<T> Normalize(Vector<T> v) { return v * RSqrt32(v.Dot(v)); }
 
     /**
      * @brief Converting vector to degrees
