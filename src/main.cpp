@@ -1,5 +1,45 @@
 #include "simple3d.hpp"
+#include <thread>
 #include <sstream>
+#include <chrono>
+
+class Portal {
+public:
+    Transform mTransform;
+
+    Framebuffer mPortalFb;
+    Renderbuffer mPortalRb;
+    RMat lastView;
+
+    void Bind() {
+        lastView = _gView;
+        mPortalFb.Bind();
+        SetView(mTransform.GetPosition(), mTransform.GetPosition() + (RMat::RotateX(mTransform.GetRotation().x) * RMat::RotateY(mTransform.GetRotation().y) * RMat::RotateZ(mTransform.GetRotation().z) * RVec(0.0f, 0.0f, 1.0f)));
+    }
+
+    void MakeTexture(int width, int height) {
+        mPortalFb.Unbind();
+        mPortalRb.CreateStorage(&mPortalFb, width, height);
+        _gView = lastView;
+    }
+
+    void Render() {
+        RMat lastTf = _gTransform;
+        _gTransform = mTransform.GetTransform();
+
+        UseTexture(mPortalFb());
+        RenderSquare(RVec(), RVec(1.0f), RVec(1.0f));
+        UseTexture(&gWhite);
+
+        _gTransform = lastTf;
+    }
+
+    void Teleport(Portal* other, Particle* particle) {
+        if(AABBPointCollider(mTransform.GetPosition(), mTransform.GetScale(), particle->mPosition)) {
+            particle->mPosition = other->mTransform.GetPosition();
+        }
+    }
+};
 
 class Wnd : public Window {
 public:
@@ -7,12 +47,83 @@ public:
     std::vector<float> colors;
     Texture map1Texture;
     Particle player;
-    RVec playerSize = RVec(0.6f, 1.6f, 0.6f);
+    RVec playerSize = RVec(1.0f, 2.0f, 1.0f);
     std::vector<RVec> shortestPoints;
     std::vector<RVec> shortestPointsNormals;
     bool physicsSwitch = false;
 
+    bool onGround = false;
+    const real playerWalk = 0.5;
+    const real playerSprint = 0.75;
+    const real playerJumpHeight = 9.8;
+
+    int fixedPerSec = 256;
+
+    void FixedUpdate() {
+        while(1) {
+            std::chrono::time_point start = std::chrono::high_resolution_clock::now();
+
+            double fixed_dt = 1.0 / (double)fixedPerSec;
+            if(physicsSwitch) {
+                player.Update(fixed_dt);
+            }
+
+            shortestPoints.clear();
+            shortestPointsNormals.clear();
+
+            RVec normal;
+
+            for(uint32_t i = 0; i < map1.mVertices.size() / 9; i++) {
+                RVec pt1 = mapTransform * RVec(map1.mVertices[i * 9 + 0], map1.mVertices[i * 9 + 1], map1.mVertices[i * 9 + 2]);
+                RVec pt2 = mapTransform * RVec(map1.mVertices[i * 9 + 3], map1.mVertices[i * 9 + 4], map1.mVertices[i * 9 + 5]);
+                RVec pt3 = mapTransform * RVec(map1.mVertices[i * 9 + 6], map1.mVertices[i * 9 + 7], map1.mVertices[i * 9 + 8]);
+
+                normal = RVec::PlaneNormal(pt1, pt2, pt3);
+                RVec point = PointOnPlane(player.mPosition, pt1, pt2, pt3);
+
+                if(point.w == 1.0f) {
+                    shortestPoints.push_back(point);
+                    shortestPointsNormals.push_back(normal);
+                }
+            }
+
+            onGround = false;
+
+            if(physicsSwitch) {
+                for(uint32_t i = 0; i < shortestPoints.size(); i++) {
+                    if(AABBPointCollider(player.mPosition, playerSize, shortestPoints[i])) {
+                        if(player.mPosition.y - (playerSize.y / 2.0) > shortestPoints[i].y) {
+                            onGround = true;
+                        }
+                        else {
+                            player.mVelocity -= shortestPointsNormals[i];
+                        }
+                        
+                        real px = shortestPoints[i].Distance(player.mPosition + RVec(playerSize.x));
+                        real py = shortestPoints[i].Distance(player.mPosition + RVec(playerSize.y));
+                        real pz = shortestPoints[i].Distance(player.mPosition + RVec(playerSize.z));
+                        real mx = shortestPoints[i].Distance(player.mPosition - RVec(playerSize.x));
+                        real my = shortestPoints[i].Distance(player.mPosition - RVec(playerSize.y));
+                        real mz = shortestPoints[i].Distance(player.mPosition - RVec(playerSize.z));
+
+                        real min = std::min(px, std::min(py, std::min(pz, std::min(mx, std::min(my, mz)))));
+
+                        player.ResolveCollision(shortestPointsNormals[i].Negate() * RVec(min) * fixed_dt);
+                    }
+                }
+            }
+
+            while(std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start).count() < fixed_dt) continue;
+        }
+    }
+
     virtual void Start() override {
+        player.mFriction = 0.1f;
+        player.mHighFriction = 0.2f;
+
+        std::jthread fixedThread(&Wnd::FixedUpdate, this);
+        fixedThread.detach();
+
         map1 = LoadPLYMesh("map1.ply");
 
         colors.resize((map1.mVertices.size() / 3) * 4);
@@ -29,8 +140,6 @@ public:
                 }
             }
         }
-
-        printf("%ld\n", (long)map1Pixels.size());
 
         map1TexWidth *= 32;
         map1TexHeight *= 32;
@@ -59,156 +168,121 @@ public:
     Renderbuffer rb;
     RMat mapTransform = RMat::Identity();
 
+    Portal portal1, portal2;
+
     virtual void Update() override {
-        //SetRotation(RVec(Window::sTime));
         SetProjection(ToRadians(90.0f));
         SetView(player.mPosition + front + RVec(0.0f, 0.8f), player.mPosition + RVec(0.0f, 0.8f));
-        //UseTexture(&gWhite);
-        //RenderCube(RVec(), RVec(0.3f), RVec(1.0f));
 
         UseTexture(&map1Texture);
         SetRotation(RVec());
-        SetScale(RVec(10.0f));
+        SetScale(RVec(30.0f));
         mapTransform = _gTransform;
         Render(map1.mVertices, colors, map1.mTextureCoords);
 
-        SetRotation(RVec());
         SetScale(RVec(1.0f));
-        //UseTexture(fb());
-        RenderSquare(RVec(3.0), RVec(10.0), RVec(1.0f));
+
 
         glLineWidth(4.0f);
         UseTexture(&gWhite);
         for(uint32_t i = 0; i < shortestPoints.size(); i++) {
-            RenderLine(player.mPosition - RVec(0.2f), shortestPoints[i], RVec(0.0f, 1.0f, 0.0f, 1.0f));
-            RenderLine(shortestPoints[i], shortestPoints[i] + shortestPointsNormals[i], RVec(1.0f, 1.0f, 0.0f, 1.0f));
+            //RenderLine(player.mPosition - RVec(0.2f), shortestPoints[i], RVec(0.0f, 1.0f, 0.0f, 1.0f));
+            RenderLine(shortestPoints[i], shortestPoints[i] + shortestPointsNormals[i].Negate(), RVec(1.0f, 1.0f, 0.0f, 1.0f));
             RenderCube(shortestPoints[i], RVec(0.08f), RVec(0.0f, 0.0f, 1.0f, 1.0f));
         }
 
-        RenderLine(RVec(0.0f), RVec::Cross(RVec(-1.0f, 0.0f, 1.0f), RVec(cos(Window::sTime), sin(Window::sTime), 1.0f)).Normalize(), RVec(1.0f));
-        RenderLine(RVec(0.0f), RVec(-1.0f, 0.0f, 1.0f), RVec(1.0f));
-        RenderLine(RVec(0.0f), RVec(cos(Window::sTime), sin(Window::sTime), 1.0f), RVec(1.0f));
+        //_gTransform = RMat::Identity();
+
+        //portal1.mTransform.SetPosition(RVec(-1.0f, 1.0f, -4.0f));
+        //portal1.mTransform.SetScale(RVec(2.0f, 2.0f, 0.0f));
+        //portal2.mTransform.SetPosition(RVec(-1.0f, 1.0f, 4.0f));
+        //portal2.mTransform.SetScale(RVec(2.0f, 2.0f, 0.0f));
+
+        //portal1.Render();
+        //portal2.Render();
+
+        //portal1.Teleport(&portal2, &player);
+        //portal2.Teleport(&portal1, &player);
 
         _gView = RMat::Identity();
         _gTransform = RMat::Identity();
         _gProjection = RMat::Identity();
         RenderText("Pos X:" + std::to_string(player.mPosition.x) + " Y:" + std::to_string(player.mPosition.y) + " Z:" + std::to_string(player.mPosition.z), RVec(-0.9f, 0.9f), 2.0f);
         RenderText("\x1b[00fPhysics: " + (physicsSwitch == true ? std::string("1") : std::string("0")), RVec(0.7f, 0.9f), 2.0f);
+        RenderText("\x1b[0f0Velocity: " + std::to_string(player.mVelocity.Length()), RVec(-0.9f, 0.8f), 2.0f);
+        glPointSize(4.0f);
+        RenderPoint(RVec(), RVec(1.0f));
+        glPointSize(1.0f);
 
-        std::stringstream ss;
-        for(uint32_t i = 0; i < shortestPoints.size(); i++) {
-            if(AABBPointCollider(player.mPosition, playerSize, shortestPoints[i])) {
-                ss << shortestPointsNormals[i] << "\n";
-            }
-        }
-        RenderText(ss.str(), RVec(), 2.0f);
-
-        /*fb.Bind();
-
-        glViewport(0, 0, 0x800, 0x800);
+        /*portal1.Bind();
 
         glClear(0x4100);
+        glClearColor(0.0f, 0.0f, 1.0f, 1.0f);
 
-        SetRotation(RVec(Window::sTime));
         SetProjection(ToRadians(90.0f));
-        SetView(player.mPosition + front, player.mPosition);
-        UseTexture(&gWhite);
-        RenderCube(RVec(), RVec(0.3f), RVec(1.0f));
 
         UseTexture(&map1Texture);
         SetRotation(RVec());
-        SetScale(RVec(10.0f));
+        SetScale(RVec(30.0f));
+        mapTransform = _gTransform;
         Render(map1.mVertices, colors, map1.mTextureCoords);
 
-        SetRotation(RVec());
         SetScale(RVec(1.0f));
-        UseTexture(fb());
-        RenderSquare(RVec(3.0), RVec(10.0), RVec(1.0f));
-        glClearColor(0.0f, 0.0f, 0.3f, 1.0f);
 
-        fb.Unbind();
+        portal1.MakeTexture(Window::sWidth, Window::sHeight);*/
 
-        rb.CreateStorage(&fb, 0x800, 0x800);
-        //fb.GetColorTexture(16384, 16384);
-        glViewport(0, 0, Window::sWidth, Window::sHeight);*/
+        /*portal2.Bind();
+
+        UseTexture(&map1Texture);
+        SetRotation(RVec());
+        SetScale(RVec(30.0f));
+        mapTransform = _gTransform;
+        Render(map1.mVertices, colors, map1.mTextureCoords);
+
+        SetScale(RVec(1.0f));
+
+        portal2.MakeTexture(Window::sWidth, Window::sHeight);*/
     }
 
     int lastOffX = 400, lastOffY = 300;
     float camX, camY;
 
-    /*RVec PointOnPlane(RVec pv1, RVec pv2, RVec pv3, RVec point) {
-        RVec plane_normal = (pv2 - pv1).Cross(pv3 - pv1).Normalize();
-        real point_length = (plane_normal.Dot(point - pv1));
-        RVec point_on_plane = point - (plane_normal * point_length);
-
-        return point_on_plane;
-    }*/
-
     virtual void LateUpdate() override {
+        RVec calc_front = right.Cross(RVec(0.0f, 1.0f)).Normalize().Negate();
         if(physicsSwitch) {
-            player.Update(Window::sDeltaTime);
-        }
+            real speed = playerWalk;
 
-        shortestPoints.clear();
-
-        RVec normal;
-
-        for(uint32_t i = 0; i < map1.mVertices.size() / 9; i++) {
-            RVec pt1 = mapTransform * RVec(map1.mVertices[i * 9 + 0], map1.mVertices[i * 9 + 1], map1.mVertices[i * 9 + 2]);
-            RVec pt2 = mapTransform * RVec(map1.mVertices[i * 9 + 3], map1.mVertices[i * 9 + 4], map1.mVertices[i * 9 + 5]);
-            RVec pt3 = mapTransform * RVec(map1.mVertices[i * 9 + 6], map1.mVertices[i * 9 + 7], map1.mVertices[i * 9 + 8]);
-
-            /*RVec normal = RVec::PlaneNormal(p1, p2, p3) / RVec::PlaneNormal(p1, p2, p3).Length();
-            real distance = abs(player.mPosition.Dot(normal));
-
-            if(distance < shortestDistance) {
-                shortestDistance = distance;
-
-                shortestPoint = player.mPosition - (RVec::PlaneNormal(p1, p2, p3) * distance);
-            }*/
-
-
-            RVec point = PointOnPlane(player.mPosition, pt1, pt2, pt3);
-            normal = RVec::Cross(pt1 - pt2, pt1 - pt3).Normalize();
-
-            if(point.w == 1.0f) {
-                shortestPoints.push_back(point);
-                shortestPointsNormals.push_back(normal);
+            if(GetKey(GLFW_KEY_LEFT_SHIFT)) {
+                speed = playerSprint;
             }
-        }
 
-        if(physicsSwitch) {
-            for(auto point : shortestPoints) {
-                if(AABBPointCollider(player.mPosition, playerSize, point)) {
-                    player.ResolveCollision(normal.Negate() * Window::sDeltaTime);
-                }
-            }
-        }
-
-        if(physicsSwitch) {
             if(GetKey('W')) {
-                player.mVelocity += front * 0.1;
+                player.mVelocity += calc_front * speed;
             }
             else if(GetKey('S')) {
-                player.mVelocity -= front * 0.1;
+                player.mVelocity -= calc_front * speed;
             }
 
             if(GetKey('A')) {
-                player.mVelocity.x -= right.x * 0.1;
-                player.mVelocity.z -= right.z * 0.1;
+                player.mVelocity.x -= right.x * speed;
+                player.mVelocity.z -= right.z * speed;
             }
             else if(GetKey('D')) {
-                player.mVelocity.x += right.x * 0.1;
-                player.mVelocity.z += right.z * 0.1;
+                player.mVelocity.x += right.x * speed;
+                player.mVelocity.z += right.z * speed;
+            }
+
+            if(GetKey(' ') && onGround) {
+                player.mVelocity.y += playerJumpHeight;
             }
         }
         else {
             player.mVelocity = RVec();
             if(GetKey('W')) {
-                player.mPosition += front * 0.1;
+                player.mPosition += calc_front * 0.1;
             }
             else if(GetKey('S')) {
-                player.mPosition -= front * 0.1;
+                player.mPosition -= calc_front * 0.1;
             }
 
             if(GetKey('A')) {
