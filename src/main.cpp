@@ -55,7 +55,7 @@ public:
     bool onGround = false;
     const real playerWalk = 0.5;
     const real playerSprint = 0.75;
-    const real playerJumpHeight = 9.8;
+    const real playerJumpHeight = 4.9;
 
     int fixedPerSec = 256;
 
@@ -91,13 +91,17 @@ public:
 
             if(physicsSwitch) {
                 for(uint32_t i = 0; i < shortestPoints.size(); i++) {
+                    if(AABBPointCollider(RVec(player.mPosition.x, player.mPosition.y - playerSize.y, player.mPosition.z), RVec(0.2f), shortestPoints[i])) {
+                        onGround = true;
+                    }
+
                     if(AABBPointCollider(player.mPosition, playerSize, shortestPoints[i])) {
-                        if(player.mPosition.y - (playerSize.y / 2.0) > shortestPoints[i].y) {
+                        /*if(player.mPosition.y - (playerSize.y / 2.0) > shortestPoints[i].y) {
                             onGround = true;
                         }
                         else {
                             player.mVelocity -= shortestPointsNormals[i];
-                        }
+                        }*/
                         
                         real px = shortestPoints[i].Distance(player.mPosition + RVec(playerSize.x));
                         real py = shortestPoints[i].Distance(player.mPosition + RVec(playerSize.y));
@@ -118,8 +122,10 @@ public:
     }
 
     virtual void Start() override {
-        player.mFriction = 0.1f;
-        player.mHighFriction = 0.2f;
+        //player.mFriction = 0.1f;
+        //player.mHighFriction = 0.2f;
+        player.mDrag = 0.0001f;
+        player.mBounce = 0.1f;
 
         std::jthread fixedThread(&Wnd::FixedUpdate, this);
         fixedThread.detach();
@@ -182,6 +188,13 @@ public:
 
         SetScale(RVec(1.0f));
 
+        if(onGround) {
+            player.mDrag = 0.01f;
+        }
+        else {
+            player.mDrag = 0.0001f;
+        }
+
 
         glLineWidth(4.0f);
         UseTexture(&gWhite);
@@ -208,7 +221,7 @@ public:
         _gTransform = RMat::Identity();
         _gProjection = RMat::Identity();
         RenderText("Pos X:" + std::to_string(player.mPosition.x) + " Y:" + std::to_string(player.mPosition.y) + " Z:" + std::to_string(player.mPosition.z), RVec(-0.9f, 0.9f), 2.0f);
-        RenderText("\x1b[00fPhysics: " + (physicsSwitch == true ? std::string("1") : std::string("0")), RVec(0.7f, 0.9f), 2.0f);
+        RenderText("\x1b[00fPhysics: " + (physicsSwitch == true ? std::string("1") : std::string("0")) + (onGround == true ? std::string("\x1b[fff1") : std::string("\x1b[fff0")), RVec(0.7f, 0.9f), 2.0f);
         RenderText("\x1b[0f0Velocity: " + std::to_string(player.mVelocity.Length()), RVec(-0.9f, 0.8f), 2.0f);
         glPointSize(4.0f);
         RenderPoint(RVec(), RVec(1.0f));
@@ -297,6 +310,11 @@ public:
         
         if(GetKey('P')) {
             physicsSwitch = !physicsSwitch;
+        }
+
+        if(GetKey('R')) {
+            player.mPosition = RVec(2.0f, 2.0f, 0.0f);
+            player.mVelocity = RVec(0.0f, 0.0f, 0.0f);
         }
 
         if(GetMouse(0)) {
